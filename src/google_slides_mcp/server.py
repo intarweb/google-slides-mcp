@@ -122,21 +122,38 @@ def convert_office(file_id: str, name: str = "") -> dict:
 @mcp.tool()
 def export_pptx(presentation_id: str, upload_name: str = "") -> dict:
     """Export a native Slides deck as .pptx and upload it to Drive as a new file named
-    `upload_name` (default: the deck's title + .pptx). Returns the new file's id and link."""
-    data = _call("GET", "%s/%s/export?mimeType=%s" % (DRIVE, presentation_id, urllib.parse.quote(
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation")), raw=True)
-    title = upload_name or (_call("GET", "%s/%s?fields=name" % (DRIVE, presentation_id)).get("name", "deck") + ".pptx")
-    boundary = "slidesmcp%d" % int(time.time())
-    body = ("--%s\r\nContent-Type: application/json\r\n\r\n%s\r\n--%s\r\nContent-Type: "
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation\r\n\r\n"
-            % (boundary, json.dumps({"name": title}), boundary)).encode() + data + ("\r\n--%s--" % boundary).encode()
-    req = urllib.request.Request("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink",
-                                 data=body, method="POST", headers={
-                                     "Authorization": "Bearer " + _access_token(),
-                                     "Content-Type": "multipart/related; boundary=" + boundary})
-    r = json.loads(urllib.request.urlopen(req, timeout=300).read())
-    return {"fileId": r["id"], "name": r.get("name"), "link": r.get("webViewLink"), "bytes": len(data)}
+    `upload_name` (default: the deck's title + .pptx). Returns the new file's id and link.
 
+    Uses the docs.google.com export, not Drive files.export: Drive's export refuses anything over
+    10 MB (exportSizeLimitExceeded), and a deck with images is often bigger."""
+    pptx = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    req = urllib.request.Request("https://docs.google.com/presentation/d/%s/export/pptx" % presentation_id,
+                                 headers={"Authorization": "Bearer " + _access_token()})
+    try:
+        with urllib.request.urlopen(req, timeout=600) as r:
+            data = r.read()
+    except urllib.error.HTTPError as e:
+        raise RuntimeError("export %s: HTTP %d" % (presentation_id, e.code)) from None
+    if data[:2] != b"PK":
+        raise RuntimeError("export %s returned %d bytes that are not a .pptx" % (presentation_id, len(data)))
+    title = upload_name or (_call("GET", "%s/%s?fields=name&supportsAllDrives=true" % (DRIVE, presentation_id)).get("name", "deck") + ".pptx")
+    # Resumable upload: one session, then the bytes. A single multipart request is not safe for a
+    # file this size.
+    start = urllib.request.Request(
+        "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,webViewLink",
+        data=json.dumps({"name": title, "mimeType": pptx}).encode(), method="POST", headers={
+            "Authorization": "Bearer " + _access_token(), "Content-Type": "application/json; charset=UTF-8",
+            "X-Upload-Content-Type": pptx, "X-Upload-Content-Length": str(len(data))})
+    with urllib.request.urlopen(start, timeout=60) as r:
+        session = r.headers["Location"]
+    put = urllib.request.Request(session, data=data, method="PUT", headers={
+        "Content-Type": pptx, "Content-Length": str(len(data))})
+    try:
+        with urllib.request.urlopen(put, timeout=900) as r:
+            f = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        raise RuntimeError("upload of %s: HTTP %d %s" % (title, e.code, e.read()[:200].decode(errors="replace"))) from None
+    return {"fileId": f["id"], "name": f.get("name"), "link": f.get("webViewLink"), "bytes": len(data)}
 
 def main():
     mcp.run()
