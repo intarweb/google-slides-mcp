@@ -18,10 +18,17 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+# The mcp package has renamed its high-level server more than once; take whichever this release has.
 try:
-    from mcp.server.fastmcp import FastMCP
-except ImportError:  # older mcp releases
-    from mcp.server import FastMCP
+    from mcp.server.mcpserver import MCPServer as FastMCP
+except ImportError:
+    try:
+        from mcp.server import MCPServer as FastMCP
+    except ImportError:
+        try:
+            from mcp.server.fastmcp import FastMCP
+        except ImportError:
+            from mcp.server import FastMCP
 
 mcp = FastMCP("google-slides")
 SLIDES = "https://slides.googleapis.com/v1/presentations"
