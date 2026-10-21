@@ -71,20 +71,23 @@ def _text(element):
 
 
 @mcp.tool()
-def get_presentation(presentation_id: str, full: bool = False) -> dict:
-    """Read a Slides deck. Default: title, and per slide its objectId plus each text box's
-    objectId and text, which is what replace/insert edits need. full=True returns the raw API
-    response (large)."""
+def get_presentation(presentation_id: str, first: int = 1, last: int = 0, full: bool = False) -> dict:
+    """Read a Slides deck. Default: title, slide count, and for slides first..last (1-based,
+    last=0 means the end) each slide's objectId plus each text box's objectId and text, which is
+    what replace/insert edits need. A large deck is big: read it in ranges. full=True returns the
+    raw API response for the whole deck."""
     p = _call("GET", "%s/%s" % (SLIDES, presentation_id))
     if full:
         return p
     slides = []
     for i, s in enumerate(p.get("slides", []), 1):
+        if i < first or (last and i > last):
+            continue
         boxes = [{"objectId": e["objectId"], "text": _text(e)}
                  for e in s.get("pageElements", []) if _text(e)]
         slides.append({"index": i, "objectId": s["objectId"], "text": boxes})
     return {"presentationId": p["presentationId"], "title": p.get("title"),
-            "slideCount": len(slides), "slides": slides}
+            "slideCount": len(p.get("slides", [])), "slides": slides}
 
 
 @mcp.tool()
